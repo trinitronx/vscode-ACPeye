@@ -7,6 +7,11 @@ on:
       - master
       - main
       - develop
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - closed
   push:
     branches:
       - master
@@ -145,6 +150,7 @@ jobs:
       - name: Package extension
         run: npx vsce package --pre-release --out ${{ needs.setup_outputs.outputs.vsix_path }}
       - name: Upload VSIX artifact
+        if: ${{ success() && format('{0}', needs.setup_outputs.outputs.authorized) == 'true' && github.event.pull_request.merged == true }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ needs.setup_outputs.outputs.vsix_name }}-${{ github.run_number }}-${{ github.run_attempt }}
@@ -166,7 +172,7 @@ jobs:
         run: eza --icons --color-scale --classify --git -la --header --tree --ignore-glob='.git'  --git-ignore --binary
         if: ${{ env.debug_ci == 'true' && runner.os != 'Windows' }}
       - name: Trigger publish workflow
-        if: ${{ success() && format('{0}', needs.setup_outputs.outputs.authorized) == 'true' }}
+        if: ${{ success() && format('{0}', needs.setup_outputs.outputs.authorized) == 'true' && github.event.pull_request.merged == true }}
         uses: actions/github-script@v7
         env:
           VSIX_ARTIFACT: "${{ needs.setup_outputs.outputs.vsix_name }}-${{ github.run_number }}-${{ github.run_attempt }}"
