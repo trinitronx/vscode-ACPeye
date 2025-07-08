@@ -50,7 +50,9 @@ jobs:
         run: echo "sha=$(echo -n '${{ steps.master_branch.outputs.sha }}' | cut -c 1-11 )" >> "$GITHUB_OUTPUT"
       - name: Extract PR GitHub Ref SHA
         id: github_ref
-        run: echo "sha=$(git rev-parse $GITHUB_REF)" >> "$GITHUB_OUTPUT"
+        run: |
+          git fetch origin ${GITHUB_REF}:${GITHUB_REF} --
+          echo "sha=$(git rev-parse $GITHUB_REF)" >> "$GITHUB_OUTPUT"
       - name: Get abbreviated GitHub Ref sha (12 chars)
         id: get_abbrev_github_ref
         run: echo "sha=$(echo -n '${{ steps.github_ref.outputs.sha }}' | cut -c 1-11 )" >> "$GITHUB_OUTPUT"
