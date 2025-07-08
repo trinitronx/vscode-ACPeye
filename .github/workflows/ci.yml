@@ -28,9 +28,13 @@ jobs:
       vsix_path: ${{ steps.get_vsix_path.outputs.vsix_path }}
       sha: ${{ steps.master_branch.outputs.sha }}
       abbrev_sha: ${{ steps.get_abbrev_sha.outputs.sha }}
+      github_sha: ${{ steps.github_ref.outputs.sha }}
+      github_abbrev_sha: ${{ steps.get_abbrev_github_ref.outputs.sha }}
       dispatch_ref: ${{ github.event.pull_request.head.ref || false }}
       extension_name: ${{ steps.get_extension_name.outputs.extension_name }}
       authorized: ${{ steps.check_user_permissions.outputs.require-result }}
+      is_merged: ${{ steps.check_pr_merged.outputs.is_merged || false }}
+      is_prerelease: ${{ steps.check_prerelease.is_prerelease || false }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,10 +48,29 @@ jobs:
       - name: Get abbreviated sha (12 chars)
         id: get_abbrev_sha
         run: echo "sha=$(echo -n '${{ steps.master_branch.outputs.sha }}' | cut -c 1-11 )" >> "$GITHUB_OUTPUT"
+      - name: Extract PR GitHub Ref SHA
+        id: github_ref
+        run: echo "sha=$(git rev-parse $GITHUB_REF)" >> "$GITHUB_OUTPUT"
+      - name: Get abbreviated GitHub Ref sha (12 chars)
+        id: get_abbrev_github_ref
+        run: echo "sha=$(echo -n '${{ steps.github_ref.outputs.sha }}' | cut -c 1-11 )" >> "$GITHUB_OUTPUT"
+      - name: Check if PR merged & github.ref is master
+        id: check_pr_merged
+        run: echo "is_merged=$(echo -n '${{ github.event.pull_request.merged == true && github.ref == 'refs/heads/master' }}')" >> "$GITHUB_OUTPUT"
+      - name: Check if PR merged & github.ref is develop
+        id: check_prerelease
+        run: echo "is_prerelease=$(echo -n '${{ github.event.pull_request.merged == true && github.ref == 'refs/heads/develop' }}')" >> "$GITHUB_OUTPUT"
       - name: Get VSCode Extension name
         id: get_extension_name
         run: echo "extension_name=$(echo "${{ github.repository_owner }}" | tr 'A-Z' 'a-z').$(echo "${{ github.event.repository.name }}" | sed -e 's/^vscode-//g')" >> "$GITHUB_OUTPUT"
-      - name: Get .vsix artifact name
+      - if: ${{ steps.check_pr_merged.outputs.is_merged == true && steps.check_prerelease.outputs.is_prerelease == false }}
+        name: Get .vsix artifact name (master branch release)
+        id: get_vsix_name
+        run: echo "vsix_name=${{ steps.get_extension_name.outputs.extension_name }}-${{ steps.get_version.outputs.version }}.${{ steps.get_abbrev_sha.outputs.sha }}" >> "$GITHUB_OUTPUT"
+      - if: >-
+          ( steps.check_pr_merged.outputs.is_merged == true && steps.check_prerelease.outputs.is_prerelease == true ) ||
+          steps.check_pr_merged.outputs.is_merged == false
+        name: Get .vsix artifact name (pre-release)
         id: get_vsix_name
         run: echo "vsix_name=${{ steps.get_extension_name.outputs.extension_name }}-${{ steps.get_version.outputs.version }}.${{ steps.get_abbrev_sha.outputs.sha }}" >> "$GITHUB_OUTPUT"
       - name: Get .vsix path
@@ -116,6 +139,18 @@ jobs:
       - name: Debug extension name
         run: |
           echo "Extension Name: ${{ needs.setup_outputs.outputs.extension_name }}"
+      - name: Debug GitHub Ref SHA
+        run: |
+          echo "SHA: ${{ needs.setup_outputs.outputs.github_sha }}"
+      - name: Debug abbreviated GitHub Ref SHA
+        run: |
+          echo "Abbreviated GitHub Ref SHA: ${{ needs.setup_outputs.outputs.github_abbrev_sha }}"
+      - name: Debug is PR merged?
+        run: |
+          echo "Is PR Merged?: ${{ needs.setup_outputs.outputs.is_merged }}"
+      - name: Debug is pre-release?
+        run: |
+          echo "Is pre-release?: ${{ needs.setup_outputs.outputs.is_prerelease }}"
       - name: Debug build conditions
         run: |
           echo "Authorized?: ${{ format('{0}', needs.setup_outputs.outputs.authorized) == 'true' }}"
@@ -139,16 +174,28 @@ jobs:
       ) &&
       needs.test.result == 'success'
     steps:
-      - uses: actions/checkout@v2
+      # Always checkout master sha unless pre-release or unmerged
+      - if: ${{ needs.setup_outputs.outputs.is_merged == true && needs.setup_outputs.outputs.is_prerelease == false }}
+        uses: actions/checkout@v2
         with:
           ref: ${{ needs.setup_outputs.outputs.sha }}
+      - if: >-
+          ( needs.setup_outputs.outputs.is_merged == true && needs.setup_outputs.outputs.is_prerelease == true ) ||
+          needs.setup_outputs.outputs.is_merged == false
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ needs.setup_outputs.outputs.github_sha }}
       - uses: actions/setup-node@v4
       - name: Install dependencies
         run: npm ci
       - name: Run typescript Transpile
         run: npm run vscode:prepublish
-      - name: Package extension
+      - if: needs.setup_outputs.outputs.is_prerelease == true
+        name: Package extension (pre-release)
         run: npx vsce package --pre-release --out ${{ needs.setup_outputs.outputs.vsix_path }}
+      - if: needs.setup_outputs.outputs.is_prerelease == false
+        name: Package extension
+        run: npx vsce package --out ${{ needs.setup_outputs.outputs.vsix_path }}
       - name: Upload VSIX artifact
         if: ${{ success() && format('{0}', needs.setup_outputs.outputs.authorized) == 'true' && github.event.pull_request.merged == true }}
         uses: actions/upload-artifact@v4
@@ -177,10 +224,12 @@ jobs:
         env:
           VSIX_ARTIFACT: "${{ needs.setup_outputs.outputs.vsix_name }}-${{ github.run_number }}-${{ github.run_attempt }}"
           DISPATCH_REF: "${{ needs.setup_outputs.outputs.dispatch_ref }}"
+          PRE_RELEASE: "${{ needs.setup_outputs.outputs.is_prerelease }}"
         with:
           script: |
             const vsixArtifact = process.env.VSIX_ARTIFACT;
             const dispatchRef = process.env.DISPATCH_REF || 'master';
+            const preRelease = process.env.PRE_RELEASE || 'true';
             const runId = process.env.GITHUB_RUN_ID;
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
@@ -190,6 +239,7 @@ jobs:
               inputs: {
                 vsix_artifact: vsixArtifact,
                 workflow_run_id: runId,
+                pre_release: preRelease,
                 publish_ms: true,
                 publish_ovsx: true
               }
