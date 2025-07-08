@@ -23,7 +23,7 @@ jobs:
   setup_outputs:
     runs-on: ubuntu-latest
     outputs:
-      vsix_name: ${{ steps.get_vsix_name.outputs.vsix_name || steps.get_vsix_name_prerelease.outputs.vsix_name }}
+      vsix_name: ${{ steps.get_vsix_name.outputs.vsix_name || steps.get_vsix_name_prerelease.outputs.vsix_name || steps.get_vsix_name_pr.outputs.vsix_name }}
       version: ${{ steps.get_version.outputs.version }}
       vsix_path: ${{ steps.get_vsix_path.outputs.vsix_path }}
       sha: ${{ steps.master_branch.outputs.sha }}
@@ -65,20 +65,24 @@ jobs:
       - name: Get VSCode Extension name
         id: get_extension_name
         run: echo "extension_name=$(echo "${{ github.repository_owner }}" | tr 'A-Z' 'a-z').$(echo "${{ github.event.repository.name }}" | sed -e 's/^vscode-//g')" >> "$GITHUB_OUTPUT"
-      - if: ${{ steps.check_pr_merged.outputs.is_merged == true && steps.check_prerelease.outputs.is_prerelease == false }}
+      - if: ${{ format('{0}', steps.check_pr_merged.outputs.is_merged) == 'true' && format('{0}', steps.check_prerelease.outputs.is_prerelease) == 'false' }}
         name: Get .vsix artifact name (master branch release)
         id: get_vsix_name
         run: echo "vsix_name=${{ steps.get_extension_name.outputs.extension_name }}-${{ steps.get_version.outputs.version }}.${{ steps.get_abbrev_github_ref.outputs.sha }}" >> "$GITHUB_OUTPUT"
       - if: >-
-          ( steps.check_pr_merged.outputs.is_merged == true && steps.check_prerelease.outputs.is_prerelease == true ) ||
-          steps.check_pr_merged.outputs.is_merged == false
+          ( format('{0}', steps.check_pr_merged.outputs.is_merged) == 'true' && format('{0}', steps.check_prerelease.outputs.is_prerelease) == 'true' )
         name: Get .vsix artifact name (pre-release)
         id: get_vsix_name_prerelease
         run: echo "vsix_name=${{ steps.get_extension_name.outputs.extension_name }}-${{ steps.get_version.outputs.version }}.${{ steps.get_abbrev_sha.outputs.sha }}" >> "$GITHUB_OUTPUT"
-      - if: steps.get_vsix_name.outputs.vsix_name != '' || steps.get_vsix_name_prerelease.outputs.vsix_name != ''
+      - if: >-
+          format('{0}', steps.check_pr_merged.outputs.is_merged) == 'false'
+        name: Get .vsix artifact name (pull request or development build)
+        id: get_vsix_name_pr
+        run: echo "vsix_name=${{ steps.get_extension_name.outputs.extension_name }}-${{ steps.get_version.outputs.version }}.dev.${{ steps.get_abbrev_sha.outputs.sha }}" >> "$GITHUB_OUTPUT"
+      - if: steps.get_vsix_name.outputs.vsix_name != '' || steps.get_vsix_name_prerelease.outputs.vsix_name != '' || steps.get_vsix_name_pr.outputs.vsix_name != ''
         name: Get .vsix path
         id: get_vsix_path
-        run: echo "vsix_path=${{ steps.get_vsix_name.outputs.vsix_name || steps.get_vsix_name_prerelease.outputs.vsix_name }}.vsix" >> "$GITHUB_OUTPUT"
+        run: echo "vsix_path=${{ steps.get_vsix_name.outputs.vsix_name || steps.get_vsix_name_prerelease.outputs.vsix_name || steps.get_vsix_name_pr.outputs.vsix_name }}.vsix" >> "$GITHUB_OUTPUT"
       - name: Check triggering user permissions
         id: check_user_permissions
         uses: actions-cool/check-user-permission@v2.3.0
@@ -178,13 +182,13 @@ jobs:
       needs.test.result == 'success'
     steps:
       # Always checkout master sha unless pre-release or unmerged
-      - if: ${{ needs.setup_outputs.outputs.is_merged == true && needs.setup_outputs.outputs.is_prerelease == false }}
+      - if: ${{ format('{0}', needs.setup_outputs.outputs.is_merged) == 'true' && format('{0}', needs.setup_outputs.outputs.is_prerelease) == 'false' }}
         uses: actions/checkout@v2
         with:
           ref: ${{ needs.setup_outputs.outputs.sha }}
       - if: >-
-          ( needs.setup_outputs.outputs.is_merged == true && needs.setup_outputs.outputs.is_prerelease == true ) ||
-          needs.setup_outputs.outputs.is_merged == false
+          ( format('{0}', needs.setup_outputs.outputs.is_merged) == 'true' && format('{0}', needs.setup_outputs.outputs.is_prerelease) == 'true' ) ||
+          format('{0}', needs.setup_outputs.outputs.is_merged) == 'false'
         uses: actions/checkout@v2
         with:
           ref: ${{ needs.setup_outputs.outputs.github_sha }}
@@ -193,14 +197,14 @@ jobs:
         run: npm ci
       - name: Run typescript Transpile
         run: npm run vscode:prepublish
-      - if: needs.setup_outputs.outputs.is_prerelease == true
+      - if: format('{0}', needs.setup_outputs.outputs.is_prerelease) == 'true' || format('{0}', needs.setup_outputs.outputs.is_merged) == 'false'
         name: Package extension (pre-release)
         run: npx vsce package --pre-release --out ${{ needs.setup_outputs.outputs.vsix_path }}
-      - if: needs.setup_outputs.outputs.is_prerelease == false
+      - if: format('{0}', needs.setup_outputs.outputs.is_prerelease) == 'false' && format('{0}', needs.setup_outputs.outputs.is_merged) == 'true'
         name: Package extension
         run: npx vsce package --out ${{ needs.setup_outputs.outputs.vsix_path }}
       - name: Upload VSIX artifact
-        if: ${{ success() && format('{0}', needs.setup_outputs.outputs.authorized) == 'true' && github.event.pull_request.merged == true }}
+        if: ${{ success() && format('{0}', needs.setup_outputs.outputs.authorized) == 'true' && format('{0}', github.event.pull_request.merged) == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ needs.setup_outputs.outputs.vsix_name }}-${{ github.run_number }}-${{ github.run_attempt }}
@@ -222,7 +226,7 @@ jobs:
         run: eza --icons --color-scale --classify --git -la --header --tree --ignore-glob='.git'  --git-ignore --binary
         if: ${{ env.debug_ci == 'true' && runner.os != 'Windows' }}
       - name: Trigger publish workflow
-        if: ${{ success() && format('{0}', needs.setup_outputs.outputs.authorized) == 'true' && github.event.pull_request.merged == true }}
+        if: ${{ success() && format('{0}', needs.setup_outputs.outputs.authorized) == 'true' && format('{0}', github.event.pull_request.merged) == 'true' }}
         uses: actions/github-script@v7
         env:
           VSIX_ARTIFACT: "${{ needs.setup_outputs.outputs.vsix_name }}-${{ github.run_number }}-${{ github.run_attempt }}"
