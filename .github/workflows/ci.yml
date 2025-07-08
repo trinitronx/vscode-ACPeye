@@ -225,6 +225,9 @@ jobs:
       - name: List files in pretty print tree view
         run: eza --icons --color-scale --classify --git -la --header --tree --ignore-glob='.git'  --git-ignore --binary
         if: ${{ env.debug_ci == 'true' && runner.os != 'Windows' }}
+      - name: List files inside .vsix
+        if: ${{ env.debug_ci == 'true' && needs.setup_outputs.outputs.vsix_path != '' }}
+        run: unzip -l '${{ needs.setup_outputs.outputs.vsix_path }}' || true
       - name: Trigger publish workflow
         if: ${{ success() && format('{0}', needs.setup_outputs.outputs.authorized) == 'true' && format('{0}', github.event.pull_request.merged) == 'true' }}
         uses: actions/github-script@v7
